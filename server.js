@@ -45,12 +45,28 @@ async function sendWhatsAppMessage(phoneNumberId, to, message) {
 }
 
 // --- Cargar productos desde archivo local ---
+const { GoogleSpreadsheet } = require('google-spreadsheet');
+const { JWT } = require('google-auth-library');
+
+const SCOPES = [
+  'https://www.googleapis.com/auth/spreadsheets.readonly'
+];
+
+const jwt = new JWT({
+  email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+  key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+  scopes: SCOPES,
+});
+
 async function loadProducts() {
   try {
-    console.log('Cargando productos desde GitHub...');
-    const response = await fetch('https://raw.githubusercontent.com/tiendaasoferru-dev/asoferru-chatbot/main/data/products_filtered.json');
-    const products = await response.json();
-    console.log(`${products.length} productos cargados desde GitHub.`);
+    console.log('Cargando productos desde Google Sheet...');
+    const doc = new GoogleSpreadsheet('1rvPCWMBQrgUocN0W6ptPjULkSFiVpDONbVbf9IkepVg', jwt);
+    await doc.loadInfo();
+    const sheet = doc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+    const products = rows.map(row => row.toObject());
+    console.log(`${products.length} productos cargados desde Google Sheet.`);
     return products;
   } catch (error) {
     console.error('Error al cargar productos:', error);
@@ -170,6 +186,7 @@ Chat iniciado: ${new Date().toLocaleString()}`;
 
 IMPORTANTE: 
 - Siempre que sea relevante, menciona los productos disponibles y proporciona la URL directa del producto
+- Si no encuentras un producto o no estás seguro de lo que el cliente busca, remítelo a nuestra página web: https://asoferru.mitiendanube.com
 - Si el cliente necesita atención personalizada, sugiere que diga "hablar con humano"
 - Mantén un tono profesional pero amigable
 - Enfócate en los productos disponibles en nuestra tienda online`;
