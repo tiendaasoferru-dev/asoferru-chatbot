@@ -45,27 +45,14 @@ async function sendWhatsAppMessage(phoneNumberId, to, message) {
 }
 
 // --- Cargar productos desde archivo local ---
-const { GoogleSpreadsheet } = require('google-spreadsheet');
-const { JWT } = require('google-auth-library');
-
-const SCOPES = [
-  'https://www.googleapis.com/auth/spreadsheets.readonly'
-];
-
-const jwt = new JWT({
-  email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-  key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-  scopes: SCOPES,
-});
+const Papa = require('papaparse');
 
 async function loadProducts() {
   try {
     console.log('Cargando productos desde Google Sheet...');
-    const doc = new GoogleSpreadsheet('1rvPCWMBQrgUocN0W6ptPjULkSFiVpDONbVbf9IkepVg', jwt);
-    await doc.loadInfo();
-    const sheet = doc.sheetsByIndex[0];
-    const rows = await sheet.getRows();
-    const products = rows.map(row => row.toObject());
+    const response = await fetch('https://docs.google.com/spreadsheets/d/1rvPCWMBQrgUocN0W6ptPjULkSFiVpDONbVbf9IkepVg/export?format=csv');
+    const csvData = await response.text();
+    const products = Papa.parse(csvData, { header: true }).data;
     console.log(`${products.length} productos cargados desde Google Sheet.`);
     return products;
   } catch (error) {
