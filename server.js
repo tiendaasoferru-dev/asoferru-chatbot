@@ -168,7 +168,7 @@ Chat iniciado: ${new Date().toLocaleString()}`;
 
         const history = conversationHistory[from] || [];
 
-        let systemMessage = `Eres un vendedor cordial y enérgico de ASOFERRU Urabá. Tu objetivo es asistir a los clientes, responder sus preguntas sobre productos y concretar ventas con entusiasmo y amabilidad. 
+        let systemMessage = `Eres Dayana, una vendedora cordial y enérgica de ASOFERRU Urabá. Tu objetivo es asistir a los clientes, responder sus preguntas sobre productos y concretar ventas con entusiasmo y amabilidad. 
 
 IMPORTANTE: 
 - SOLO puedes mencionar productos que se encuentren en la lista de productos proporcionada. No inventes productos.
