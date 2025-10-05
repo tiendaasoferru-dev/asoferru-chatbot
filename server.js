@@ -1,9 +1,9 @@
 const express = require('express');
 require('dotenv').config();
 const Groq = require('groq-sdk');
-const fs = require('fs');
 
 const app = express();
+const conversationHistory = {};
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY
 });
@@ -45,12 +45,12 @@ async function sendWhatsAppMessage(phoneNumberId, to, message) {
 }
 
 // --- Cargar productos desde archivo local ---
-function loadProducts() {
+async function loadProducts() {
   try {
-    console.log('Cargando productos desde archivo local...');
-    const productsData = fs.readFileSync('data/products_filtered.json', 'utf8');
-    const products = JSON.parse(productsData);
-    console.log(`${products.length} productos cargados desde archivo local.`);
+    console.log('Cargando productos desde GitHub...');
+    const response = await fetch('https://raw.githubusercontent.com/tiendaasoferru-dev/asoferru-chatbot/main/data/products_filtered.json');
+    const products = await response.json();
+    console.log(`${products.length} productos cargados desde GitHub.`);
     return products;
   } catch (error) {
     console.error('Error al cargar productos:', error);
@@ -62,7 +62,7 @@ function loadProducts() {
 // --- Lógica Principal de la Aplicación ---
 (async () => {
   // Carga los productos desde archivo local al iniciar.
-  const products = loadProducts();
+  const products = await loadProducts();
 
   app.get('/', (req, res) => {
     res.json({
@@ -91,6 +91,7 @@ function loadProducts() {
     }
 
     const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+    const phoneNumberId = req.body.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
 
     if (message && message.type === 'text') {
       const userMessage = message.text.body.toLowerCase();
@@ -163,24 +164,31 @@ Chat iniciado: ${new Date().toLocaleString()}`;
           productContext = "El cliente está saludando o ha enviado un mensaje corto. Responde de manera cordial, preséntate como un vendedor de ASOFERRU Urabá y ofrécele tu ayuda para encontrar lo que necesita. ¡Anímale a preguntar!";
         }
 
-        const chatCompletion = await groq.chat.completions.create({
-          messages: [
-            {
-              role: "system",
-              content: `Eres un vendedor cordial y enérgico de ASOFERRU Urabá. Tu objetivo es asistir a los clientes, responder sus preguntas sobre productos y concretar ventas con entusiasmo y amabilidad. 
+        const history = conversationHistory[from] || [];
+
+        let systemMessage = `Eres un vendedor cordial y enérgico de ASOFERRU Urabá. Tu objetivo es asistir a los clientes, responder sus preguntas sobre productos y concretar ventas con entusiasmo y amabilidad. 
 
 IMPORTANTE: 
 - Siempre que sea relevante, menciona los productos disponibles y proporciona la URL directa del producto
 - Si el cliente necesita atención personalizada, sugiere que diga "hablar con humano"
 - Mantén un tono profesional pero amigable
-- Enfócate en los productos disponibles en nuestra tienda online
+- Enfócate en los productos disponibles en nuestra tienda online`;
 
-${productContext}`
-            },
+        if (history.length === 0) {
+          systemMessage += `
+
+${productContext}`;
+        }
+
+        history.push({ role: "user", content: userMessage });
+
+        const chatCompletion = await groq.chat.completions.create({
+          messages: [
             {
-              role: "user",
-              content: userMessage,
-            }
+              role: "system",
+              content: systemMessage
+            },
+            ...history
           ],
           model: "llama-3.1-8b-instant",
         });
@@ -188,7 +196,9 @@ ${productContext}`
         const aiResponse = chatCompletion.choices[0]?.message?.content || "Lo siento, no pude generar una respuesta.";
         console.log(`🤖 Respuesta de la IA para ${from}: ${aiResponse}`);
 
-        const phoneNumberId = req.body.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
+        history.push({ role: "assistant", content: aiResponse });
+        conversationHistory[from] = history;
+
         await sendWhatsAppMessage(phoneNumberId, from, aiResponse);
 
       } catch (error) {

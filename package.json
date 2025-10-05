@@ -4,7 +4,8 @@
   "description": "Chatbot con IA para Asoferru en WhatsApp",
   "main": "server.js",
   "scripts": {
-    "start": "node --openssl-legacy-provider server.js"
+    "start": "node server.js",
+    "test": "vitest"
   },
   "keywords": [
     "whatsapp",
@@ -20,5 +21,8 @@
     "google-auth-library": "^10.4.0",
     "google-spreadsheet": "^5.0.2",
     "groq-sdk": "^0.33.0"
+  },
+  "devDependencies": {
+    "vitest": "^1.6.0"
   }
 }
