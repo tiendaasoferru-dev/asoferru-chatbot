@@ -1,5 +1,4 @@
 const express = require('express');
-require('dotenv').config();
 const Groq = require('groq-sdk');
 
 const app = express();
