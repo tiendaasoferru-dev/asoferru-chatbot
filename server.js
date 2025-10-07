@@ -178,11 +178,10 @@ IMPORTANTE:
 - Mantén un tono profesional pero amigable
 - Enfócate en los productos disponibles en nuestra tienda online`;
 
-        if (history.length === 0) {
-          systemMessage += `
+        systemMessage += `
 
 ${productContext}`;
-        }
+
 
         history.push({ role: "user", content: userMessage });
 
