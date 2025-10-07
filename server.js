@@ -185,14 +185,18 @@ ${productContext}`;
 
         history.push({ role: "user", content: userMessage });
 
-        const chatCompletion = await groq.chat.completions.create({
-          messages: [
+        const messagesToSent = [
             {
               role: "system",
               content: systemMessage
             },
             ...history
-          ],
+          ];
+
+        console.log("📦 Payload enviado a Groq:", JSON.stringify(messagesToSent, null, 2));
+
+        const chatCompletion = await groq.chat.completions.create({
+          messages: messagesToSent,
           model: "llama-3.1-8b-instant",
         });
 
