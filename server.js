@@ -156,7 +156,10 @@ Chat iniciado: ${new Date().toLocaleString()}`;
 
         let productContext = "";
         if (relevantProducts.length > 0) {
-          productContext = `Aquí hay algunos productos de ASOFERRU Urabá que podrían interesarle al cliente, basados en su consulta. Utiliza esta información para responder de manera entusiasta y, si el cliente muestra interés o pregunta por más detalles, proporciónale la URL directa del producto para que pueda comprarlo. Los productos son: ${JSON.stringify(relevantProducts)}`;
+          const productStrings = relevantProducts.map(p => 
+            `Nombre: ${p.producto}\nDescripción: ${p.descripcion}\nEnlace para ver y comprar: ${p.url_tienda}`
+          );
+          productContext = `He encontrado estos productos que coinciden con tu búsqueda:\n\n${productStrings.join('\n\n')}`;
         } else {
           productContext = "No se encontraron productos específicos que coincidan con la consulta del cliente. Responde de manera general, saluda cordialmente y ofrece tu ayuda para encontrar lo que necesita en la ferretería ASOFERRU Urabá. Anímale a preguntar por lo que busca.";
         }
@@ -171,6 +174,7 @@ Chat iniciado: ${new Date().toLocaleString()}`;
         let systemMessage = `Eres Dayana, una vendedora cordial y enérgica de ASOFERRU Urabá. Tu objetivo es asistir a los clientes, responder sus preguntas sobre productos y concretar ventas con entusiasmo y amabilidad. 
 
 IMPORTANTE: 
+- NUNCA menciones el precio directamente. En su lugar, di 'Puedes ver el precio y más detalles en el enlace del producto' y proporciona el enlace.
 - SOLO puedes mencionar productos que se encuentren en la lista de productos proporcionada. No inventes productos.
 - Si un cliente pregunta por un producto que no está en la lista, debes decirle que no lo tienes y remitirlo a nuestra página web: https://asoferru.mitiendanube.com
 - Siempre que sea relevante, menciona los productos disponibles y proporciona la URL directa del producto
