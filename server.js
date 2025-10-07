@@ -178,17 +178,12 @@ IMPORTANTE:
 - Mantén un tono profesional pero amigable
 - Enfócate en los productos disponibles en nuestra tienda online`;
 
-        systemMessage += `
-
-${productContext}`;
-
-
         history.push({ role: "user", content: userMessage });
 
         const messagesToSent = [
             {
               role: "system",
-              content: systemMessage
+              content: `${systemMessage}\n\nContexto de productos para esta consulta: ${productContext}`
             },
             ...history
           ];
