@@ -49,9 +49,14 @@ const Papa = require('papaparse');
 async function loadProducts() {
   try {
     console.log('Cargando productos desde Google Sheet...');
-    const response = await fetch('https://docs.google.com/spreadsheets/d/1rvPCWMBQrgUocN0W6ptPjULkSFiVpDONbVbf9IkepVg/export?format=csv');
+    const response = await fetch('https://docs.google.com/spreadsheets/d/1zZBPz8ELaa06X7lBfh5GJcJkhzVK6lZHq7-TvG4LIls/export?format=csv');
     const csvData = await response.text();
-    const products = Papa.parse(csvData, { header: true }).data;
+    const parsedProducts = Papa.parse(csvData, { header: true }).data;
+
+    // ¡AÑADIMOS EL FILTRO AQUÍ!
+    // Esto elimina cualquier fila que esté vacía o no tenga un nombre de producto.
+    const products = parsedProducts.filter(p => p.producto && p.producto.trim() !== '');
+
     console.log(`${products.length} productos cargados desde Google Sheet.`);
     return products;
   } catch (error) {
