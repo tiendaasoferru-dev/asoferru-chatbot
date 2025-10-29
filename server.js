@@ -156,31 +156,30 @@ Chat iniciado: ${new Date().toLocaleString()}`;
 
         let productContext = "";
         if (relevantProducts.length > 0) {
-          const productStrings = relevantProducts.map(p => 
+          const productStrings = relevantProducts.map(p =>
             `Nombre: ${p.producto}\nDescripción: ${p.descripcion}\nEnlace para ver y comprar: ${p.url_tienda}`
           );
           productContext = `He encontrado estos productos que coinciden con tu búsqueda:\n\n${productStrings.join('\n\n')}`;
         } else {
-          productContext = "No se encontraron productos específicos que coincidan con la consulta del cliente. Responde de manera general, saluda cordialmente y ofrece tu ayuda para encontrar lo que necesita en la ferretería ASOFERRU Urabá. Anímale a preguntar por lo que busca.";
+          // Si no hay productos, se le instruye al bot que siga la regla de fallback.
+          productContext = "No se encontraron productos que coincidan con la consulta. Sigue la REGLA 3 (FALLBACK OBLIGATORIO) de tu system prompt.";
         }
-        
+
         const greetings = ['hola', 'buenos', 'buenas', 'qué tal', 'que tal'];
         if (keywords.length === 0 || greetings.some(g => userMessage.startsWith(g))) {
-          productContext = "El cliente está saludando o ha enviado un mensaje corto. Responde de manera cordial, preséntate como un vendedor de ASOFERRU Urabá y ofrécele tu ayuda para encontrar lo que necesita. ¡Anímale a preguntar!";
+          // Si es un saludo, se le da un contexto neutral para que se presente.
+          productContext = "El cliente está saludando. Preséntate cordialmente como Dayana de ASOFERRU Urabá y ofrécele tu ayuda.";
         }
 
         const history = conversationHistory[from] || [];
+        let systemMessage = `Eres Dayana, una vendedora experta de ASOFERRU Urabá. Tu única fuente de verdad es la lista de productos proporcionada en el 'Contexto de productos'.
 
-        let systemMessage = `Eres Dayana, una vendedora cordial y enérgica de ASOFERRU Urabá. Tu objetivo es asistir a los clientes, responder sus preguntas sobre productos y concretar ventas con entusiasmo y amabilidad. 
-
-IMPORTANTE: 
-- NUNCA menciones el precio directamente. En su lugar, di 'Puedes ver el precio y más detalles en el enlace del producto' y proporciona el enlace.
-- SOLO puedes mencionar productos que se encuentren en la lista de productos proporcionada. No inventes productos.
-- Si un cliente pregunta por un producto que no está en la lista, debes decirle que no lo tienes y remitirlo a nuestra página web: https://asoferru.mitiendanube.com
-- Siempre que sea relevante, menciona los productos disponibles y proporciona la URL directa del producto
-- Si el cliente necesita atención personalizada o pide hablar con un humano, sugiérele que diga "hablar con humano" o contáctalo directamente con el vendedor al número +573147069247.
-- Mantén un tono profesional pero amigable
-- Enfócate en los productos disponibles en nuestra tienda online`;
+**REGLAS ABSOLUTAS:**
+1.  **PROHIBIDO INVENTAR:** No puedes mencionar, sugerir o crear promociones, descuentos, ofertas, regalos o cualquier información que no esté explícitamente en la descripción de un producto del contexto. Si te preguntan por descuentos, responde: "No tengo información sobre promociones actuales, pero puedes ver los detalles y precios finales en el enlace de cada producto".
+2.  **CÍÑETE AL CONTEXTO:** SOLO puedes hablar de los productos encontrados en el 'Contexto de productos'. No asumas la existencia de otros productos.
+3.  **FALLBACK OBLIGATORIO:** Si la pregunta del cliente no puede ser respondida con la información del 'Contexto de productos', tu ÚNICA respuesta debe ser en dos partes: Primero, dirigirlo a la tienda online. Segundo, ofrecer ayuda de un humano. Responde exactamente así: "No encontré un producto específico para tu consulta, pero puedes explorar nuestro catálogo completo en nuestra tienda online: https://asoferru.mitiendanube.com/productos/ . Si prefieres, también puedo comunicarte con un asesor. ¿Qué te gustaría hacer?".
+4.  **NO DES PRECIOS:** Nunca menciones el precio directamente. Siempre dirige al cliente al enlace del producto para ver el precio y más detalles.
+5.  **IDENTIDAD:** Mantén un tono cordial y profesional como Dayana. Tu objetivo es asistir y guiar al cliente hacia la compra a través de los enlaces proporcionados.`;
 
         history.push({ role: "user", content: userMessage });
 
