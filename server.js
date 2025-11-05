@@ -2,6 +2,8 @@ const express = require('express');
 const Groq = require('groq-sdk');
 const Papa = require('papaparse');
 const fetch = require('node-fetch');
+const { pipeline } = require('@xenova/transformers');
+
 const app = express();
 const conversationHistory = {};
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -9,10 +11,8 @@ const port = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// --- INICIO: CARGA DINÁMICA DE PRODUCTOS DESDE GOOGLE SHEETS ---
-
+// --- INICIO: CARGA DINÁMICA DE PRODUCTOS ---
 const SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1zZBPz8ELaa06X7lBfh5GJcJkhzVK6lZHq7-TvG4LIls/export?format=csv&gid=1827939452';
-
 let products = [];
 let productsWithEmbeddings = [];
 
@@ -21,7 +21,6 @@ async function loadProductsFromSheet() {
     try {
         const response = await fetch(SPREADSHEET_URL);
         const csvText = await response.text();
-        
         return new Promise(resolve => {
             Papa.parse(csvText, {
                 header: true,
@@ -43,10 +42,20 @@ async function loadProductsFromSheet() {
     }
 }
 
-// --- FIN: CARGA DINÁMICA DE PRODUCTOS DESDE GOOGLE SHEETS ---
+// --- FIN: CARGA DINÁMICA DE PRODUCTOS ---
 
 
-// --- INICIO: LÓGICA DE BÚSQUEDA SEMÁNTICA ---
+// --- INICIO: LÓGICA DE BÚSQUEDA SEMÁNTICA (LOCAL) ---
+
+// Singleton para el pipeline de embeddings. Evita cargar el modelo múltiples veces.
+let extractorPromise = null;
+const getExtractor = () => {
+    if (extractorPromise === null) {
+        console.log('⏳ Cargando modelo de embeddings local por primera vez (puede tardar un momento)...');
+        extractorPromise = pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+    }
+    return extractorPromise;
+};
 
 function cosineSimilarity(vecA, vecB) {
     let dotProduct = 0.0;
@@ -57,26 +66,21 @@ function cosineSimilarity(vecA, vecB) {
         normA += vecA[i] * vecA[i];
         normB += vecB[i] * vecB[i];
     }
-    if (normA === 0 || normB === 0) {
-        return 0;
-    }
+    if (normA === 0 || normB === 0) return 0;
     return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
 async function generateEmbeddings(productList) {
-    console.log('🧠 Generando mapa de significados para los productos...');
-    const embeddingModel = 'text-embedding-3-small';
-    productsWithEmbeddings = []; 
+    console.log('🧠 Generando mapa de significados para los productos (localmente)...');
+    const extractor = await getExtractor();
+    productsWithEmbeddings = [];
     for (const product of productList) {
         const productName = product.producto || '';
         const productDesc = product.descripcion || '';
         const inputText = `Producto: ${productName}. Descripción: ${productDesc}`;
         try {
-            const embeddingResponse = await groq.embeddings.create({
-                model: embeddingModel,
-                input: inputText,
-            });
-            const embedding = embeddingResponse.data[0].embedding;
+            const output = await extractor(inputText, { pooling: 'mean', normalize: true });
+            const embedding = Array.from(output.data);
             productsWithEmbeddings.push({ ...product, embedding });
         } catch (error) {
             console.error(`Error generando embedding para el producto: ${productName}`, error);
@@ -88,15 +92,15 @@ async function generateEmbeddings(productList) {
 async function findRelevantProducts(userQuery, topK = 3) {
     if (productsWithEmbeddings.length === 0) return [];
     try {
-        const embeddingResponse = await groq.embeddings.create({
-            model: 'text-embedding-3-small',
-            input: userQuery,
-        });
-        const queryEmbedding = embeddingResponse.data[0].embedding;
+        const extractor = await getExtractor();
+        const output = await extractor(userQuery, { pooling: 'mean', normalize: true });
+        const queryEmbedding = Array.from(output.data);
+
         const similarities = productsWithEmbeddings.map(product => ({
             ...product,
             similarity: cosineSimilarity(queryEmbedding, product.embedding)
         }));
+
         similarities.sort((a, b) => b.similarity - a.similarity);
         return similarities.slice(0, topK).filter(p => p.similarity > 0.35);
     } catch (error) {
@@ -110,10 +114,40 @@ async function findRelevantProducts(userQuery, topK = 3) {
 
 // --- Función para enviar mensajes a WhatsApp ---
 async function sendWhatsAppMessage(phoneNumberId, to, text) {
-    // Esta es una función de marcador de posición. La implementación real dependería de cómo
-    // estás enviando mensajes (por ejemplo, a través de la API de la nube de WhatsApp).
-    // Asegúrate de que esta función esté correctamente implementada con tu proveedor de servicios de WhatsApp.
+    const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+    const url = `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`;
+
+    if (!WHATSAPP_TOKEN) {
+        console.error('ERROR: La variable de entorno WHATSAPP_TOKEN no está configurada.');
+        console.log(`-> (Simulado) Enviando a ${to}: "${text}"`);
+        return;
+    }
+
     console.log(`-> Enviando a ${to}: "${text}"`);
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                messaging_product: 'whatsapp',
+                to: to,
+                text: { body: text },
+            }),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            console.error(`Error al enviar mensaje de WhatsApp: ${response.status} ${response.statusText}`, errorData);
+        } else {
+            console.log('✅ Mensaje enviado con éxito.');
+        }
+    } catch (error) {
+        console.error('Error en la función sendWhatsAppMessage:', error);
+    }
 }
 
 
@@ -140,31 +174,20 @@ async function sendWhatsAppMessage(phoneNumberId, to, text) {
         const from = message.from;
         const phoneNumberId = req.body.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
 
-        // --- INICIO: GESTIÓN DE COMPROBANTES DE PAGO (IMÁGENES) ---
         if (message.type === 'image') {
             console.log(`📸 Imagen recibida de ${from}. Es un comprobante de pago.`);
-
             const userConfirmation = '¡Gracias! Hemos recibido tu comprobante. Un asesor humano se pondrá en contacto contigo en breve para coordinar el envío.';
             const agentNotification = `¡Alerta de Venta! 🔔\n\nEl cliente con el número *${from}* ha enviado un comprobante de pago.\n\nPor favor, revisa su chat para coordinar el envío.`
-            
             const agentNumber = process.env.HUMAN_AGENT_NUMBER;
-
             if (!agentNumber) {
                 console.error('ERROR: La variable de entorno HUMAN_AGENT_NUMBER no está configurada.');
             } else {
-                // 1. Notificar al asesor
                 await sendWhatsAppMessage(phoneNumberId, agentNumber, agentNotification);
             }
-            
-            // 2. Confirmar al usuario
             await sendWhatsAppMessage(phoneNumberId, from, userConfirmation);
-
             return res.status(200).send('EVENT_RECEIVED');
         }
-        // --- FIN: GESTIÓN DE COMPROBANTES DE PAGO ---
 
-
-        // Solo procesamos mensajes de texto a partir de aquí
         if (message.type !== 'text') {
             return res.status(200).send('EVENT_RECEIVED');
         }
@@ -172,7 +195,6 @@ async function sendWhatsAppMessage(phoneNumberId, to, text) {
         const userMessage = message.text.body;
         console.log(`💬 Mensaje de ${from}: ${userMessage}`);
         
-        // --- INICIO: PALABRAS CLAVE PARA PAGO ---
         const paymentKeywords = ['pagar', 'pago', 'comprobante', 'comprar'];
         const userMessageLower = userMessage.toLowerCase();
         
@@ -182,13 +204,9 @@ async function sendWhatsAppMessage(phoneNumberId, to, text) {
             await sendWhatsAppMessage(phoneNumberId, from, promptMessage);
             return res.status(200).send('EVENT_RECEIVED');
         }
-        // --- FIN: PALABRAS CLAVE PARA PAGO ---
 
-
-        // --- INICIO: LÓGICA DE BÚSQUEDA SEMÁNTICA (FALLBACK) ---
         try {
             const relevantProducts = await findRelevantProducts(userMessage);
-
             let productContext = "";
             if (relevantProducts.length > 0) {
                 const productStrings = relevantProducts.map(p =>
@@ -201,7 +219,6 @@ async function sendWhatsAppMessage(phoneNumberId, to, text) {
 
             const history = conversationHistory[from] || [];
             const systemMessage = `Eres Dayana... (resto del prompt sin cambios)`; 
-
             history.push({ role: "user", content: userMessage });
 
             const messagesToSent = [
@@ -217,19 +234,27 @@ async function sendWhatsAppMessage(phoneNumberId, to, text) {
             const aiResponse = chatCompletion.choices[0]?.message?.content || "Lo siento, no pude generar una respuesta.";
             history.push({ role: "assistant", content: aiResponse });
             conversationHistory[from] = history.slice(-6); 
-
             await sendWhatsAppMessage(phoneNumberId, from, aiResponse);
-
         } catch (error) {
             console.error("Error en el procesamiento del webhook:", error);
         }
-        // --- FIN: LÓGICA DE BÚSQUEDA SEMÁNTICA ---
 
         res.status(200).send('EVENT_RECEIVED');
     });
 
     app.get('/webhook', (req, res) => {
-        // ... (código de verificación sin cambios)
+        const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
+        let mode = req.query['hub.mode'];
+        let token = req.query['hub.verify_token'];
+        let challenge = req.query['hub.challenge'];
+        if (mode && token) {
+            if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+                console.log('✅ WEBHOOK_VERIFIED');
+                res.status(200).send(challenge);
+            } else {
+                res.sendStatus(403);
+            }
+        }
     });
 
     app.listen(port, '0.0.0.0', () => {
