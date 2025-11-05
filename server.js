@@ -2,7 +2,6 @@ const express = require('express');
 const Groq = require('groq-sdk');
 const Papa = require('papaparse');
 const fetch = require('node-fetch');
-const { pipeline } = require('@xenova/transformers');
 
 const app = express();
 const conversationHistory = {};
@@ -11,65 +10,62 @@ const port = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// --- INICIO: CARGA DINÁMICA DE PRODUCTOS ---
+// --- INICIO: LÓGICA DE PRODUCTOS Y BÚSQUEDA ---
 const SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1zZBPz8ELaa06X7lBfh5GJcJkhzVK6lZHq7-TvG4LIls/export?format=csv&gid=1827939452';
 let products = [];
-let productsWithEmbeddings = [];
 
-// ... (funciones de carga y búsqueda semántica permanecen, pero no se usarán por ahora)
-
-// --- FIN: CARGA DINÁMICA DE PRODUCTOS ---
-
-
-// --- INICIO: LÓGICA DE BÚSQUEDA SEMÁNTICA (LOCAL) ---
-
-let extractorPromise = null;
-const getExtractor = () => {
-    if (extractorPromise === null) {
-        console.log('⏳ Cargando modelo de embeddings local por primera vez (puede tardar un momento)...');
-        extractorPromise = pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+async function loadProductsFromSheet() {
+    console.log('🔄 Cargando productos desde Google Sheets...');
+    try {
+        const response = await fetch(SPREADSHEET_URL);
+        const csvText = await response.text();
+        return new Promise(resolve => {
+            Papa.parse(csvText, {
+                header: true,
+                dynamicTyping: true,
+                complete: (results) => {
+                    const loadedProducts = results.data.filter(p => p.producto && p.producto.trim() !== '');
+                    console.log(`✅ ${loadedProducts.length} productos cargados correctamente.`);
+                    resolve(loadedProducts);
+                },
+            });
+        });
+    } catch (error) {
+        console.error('Error al descargar la hoja de cálculo:', error);
+        return [];
     }
-    return extractorPromise;
-};
-
-function cosineSimilarity(vecA, vecB) {
-    let dotProduct = 0.0;
-    let normA = 0.0;
-    let normB = 0.0;
-    for (let i = 0; i < vecA.length; i++) {
-        dotProduct += vecA[i] * vecB[i];
-        normA += vecA[i] * vecA[i];
-        normB += vecB[i] * vecB[i];
-    }
-    if (normA === 0 || normB === 0) return 0;
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-async function generateEmbeddings(productList) {
-    console.log('🧠 Generando mapa de significados para los productos (localmente)...');
-    const extractor = await getExtractor();
-    productsWithEmbeddings = [];
-    for (const product of productList) {
-        const productName = product.producto || '';
-        const productDesc = product.descripcion || '';
-        const inputText = `Producto: ${productName}. Descripción: ${productDesc}`;
-        try {
-            const output = await extractor(inputText, { pooling: 'mean', normalize: true });
-            const embedding = Array.from(output.data);
-            productsWithEmbeddings.push({ ...product, embedding });
-        } catch (error) {
-            console.error(`Error generando embedding para el producto: ${productName}`, error);
-        }
-    }
-    console.log(`✅ Mapa de significados generado para ${productsWithEmbeddings.length} productos.`);
+function normalizeText(text = '') {
+    return text.toString().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
-async function findRelevantProducts(userQuery, topK = 3) {
-    // --- DIAGNÓSTICO: Devolver siempre vacío para evitar la carga del modelo ---
-    return [];
+function findRelevantProductsByKeyword(userQuery, topK = 3) {
+    const queryWords = normalizeText(userQuery).split(/\s+/).filter(w => w.length > 2);
+    if (queryWords.length === 0) return [];
+
+    const scoredProducts = products.map(product => {
+        const productName = normalizeText(product.producto);
+        const productDesc = normalizeText(product.descripcion);
+        const productCat = normalizeText(product.categoria);
+
+        let score = 0;
+        queryWords.forEach(word => {
+            if (productName.includes(word)) score += 10;
+            if (productDesc.includes(word)) score += 2;
+            if (productCat.includes(word)) score += 5;
+        });
+
+        return { ...product, score };
+    });
+
+    const relevantProducts = scoredProducts.filter(p => p.score > 0);
+    relevantProducts.sort((a, b) => b.score - a.score);
+
+    return relevantProducts.slice(0, topK);
 }
 
-// --- FIN: LÓGICA DE BÚSQUEDA SEMÁNTICA ---
+// --- FIN: LÓGICA DE PRODUCTOS Y BÚSQUEDA ---
 
 
 // --- Función para enviar mensajes a WhatsApp (con depuración de errores) ---
@@ -119,18 +115,14 @@ async function sendWhatsAppMessage(phoneNumberId, to, text, isDebugging = false)
 
 // --- Lógica Principal de la Aplicación ---
 (async () => {
-    // --- DIAGNÓSTICO: Carga de embeddings desactivada temporalmente ---
-    console.log('⚠️ MODO DIAGNÓSTICO: La carga de productos y la búsqueda semántica están desactivadas.');
-    // products = await loadProductsFromSheet();
-    // await generateEmbeddings(products);
-    // ---------------------------------------------------------
+    products = await loadProductsFromSheet();
 
     app.get('/', (req, res) => {
         res.json({
             status: 'active',
-            message: '¡El servidor del chatbot de Juan está activo! (Modo Diagnóstico)',
+            message: '¡El servidor del chatbot de Juan está activo!',
             timestamp: new Date().toISOString(),
-            products_loaded: 0
+            products_loaded: products.length
         });
     });
 
@@ -144,15 +136,9 @@ async function sendWhatsAppMessage(phoneNumberId, to, text, isDebugging = false)
         const phoneNumberId = req.body.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
 
         if (message.type === 'image') {
-            console.log(`📸 Imagen recibida de ${from}. Es un comprobante de pago.`);
             const userConfirmation = '¡Gracias! Hemos recibido tu comprobante. Un asesor humano se pondrá en contacto contigo en breve para coordinar el envío.';
             const agentNotification = `¡Alerta de Venta! 🔔\n\nEl cliente con el número *${from}* ha enviado un comprobante de pago.\n\nPor favor, revisa su chat para coordinar el envío.`
-            const agentNumber = process.env.HUMAN_AGENT_NUMBER;
-            if (!agentNumber) {
-                console.error('ERROR: La variable de entorno HUMAN_AGENT_NUMBER no está configurada.');
-            } else {
-                await sendWhatsAppMessage(phoneNumberId, agentNumber, agentNotification);
-            }
+            await sendWhatsAppMessage(phoneNumberId, process.env.HUMAN_AGENT_NUMBER, agentNotification);
             await sendWhatsAppMessage(phoneNumberId, from, userConfirmation);
             return res.status(200).send('EVENT_RECEIVED');
         }
@@ -165,25 +151,69 @@ async function sendWhatsAppMessage(phoneNumberId, to, text, isDebugging = false)
         console.log(`💬 Mensaje de ${from}: ${userMessage}`);
 
         const userMessageLower = userMessage.toLowerCase();
-        const greetingKeywords = ['hola', 'buenos', 'buenas', 'que tal'];
+        const isGreeting = ['hola', 'buenos', 'buenas', 'que tal'].some(k => userMessageLower.startsWith(k));
+        const isMenuRequest = ['menu', 'opciones', 'inicio'].some(k => userMessageLower.includes(k));
 
-        if (greetingKeywords.some(keyword => userMessageLower.startsWith(keyword))) {
-            const greeting = "Hola, soy Juan, tu Asesor de ASOFERRU Urabá. la Ferreteria mas grande de el Uraba";
-            await sendWhatsAppMessage(phoneNumberId, from, greeting);
-            return res.status(200).send('EVENT_RECEIVED');
-        }
-        
-        const paymentKeywords = ['pagar', 'pago', 'comprobante', 'comprar'];
-        if (paymentKeywords.some(keyword => userMessageLower.includes(keyword))) {
-            console.log(`💰 El usuario ${from} mencionó una palabra clave de pago.`);
-            const promptMessage = '¡Hola! Si deseas confirmar tu compra, por favor, envía en este chat la imagen de tu comprobante de pago y un asesor te contactará para coordinar la entrega.';
-            await sendWhatsAppMessage(phoneNumberId, from, promptMessage);
+        // Si es la primera interacción o pide el menú, muestra el menú.
+        if (!conversationHistory[from] || isGreeting || isMenuRequest) {
+            const menuText = `Hola, soy Juan, tu Asesor de ASOFERRU Urabá, la ferretería más grande de Urabá.\n\nPor favor, elige una opción para continuar:\n*1. 🔎 Asesor de Productos*\n*2. 💳 Pagos*\n*3. 🚚 Envíos*\n\nResponde con el número o la palabra de la opción que necesites.`;
+            await sendWhatsAppMessage(phoneNumberId, from, menuText);
+            conversationHistory[from] = { lastAction: 'menu' };
             return res.status(200).send('EVENT_RECEIVED');
         }
 
-        // Como la búsqueda está desactivada, respondemos amablemente.
-        const fallbackMessage = "En este momento estoy en mantenimiento y no puedo buscar productos. Por favor, intenta más tarde.";
-        await sendWhatsAppMessage(phoneNumberId, from, fallbackMessage);
+        const lastAction = conversationHistory[from]?.lastAction;
+
+        // Lógica para manejar la respuesta después de mostrar el menú
+        if (lastAction === 'menu') {
+            if (userMessageLower.includes('1') || userMessageLower.includes('asesor')) {
+                await sendWhatsAppMessage(phoneNumberId, from, "Claro, dime qué producto estás buscando.");
+                conversationHistory[from] = { lastAction: 'searching' };
+                return res.status(200).send('EVENT_RECEIVED');
+            }
+            if (userMessageLower.includes('2') || userMessageLower.includes('pago')) {
+                const response = "Para pagos, por favor envía la imagen de tu comprobante y un asesor te contactará.";
+                await sendWhatsAppMessage(phoneNumberId, from, response);
+                return res.status(200).send('EVENT_RECEIVED');
+            }
+            if (userMessageLower.includes('3') || userMessageLower.includes('envio')) {
+                const response = "Un asesor se pondrá en contacto contigo para coordinar lo relacionado a tu envío.";
+                await sendWhatsAppMessage(phoneNumberId, process.env.HUMAN_AGENT_NUMBER, `El cliente ${from} solicita información de envío.`);
+                await sendWhatsAppMessage(phoneNumberId, from, response);
+                return res.status(200).send('EVENT_RECEIVED');
+            }
+        }
+
+        // Lógica de búsqueda de productos
+        try {
+            const relevantProducts = findRelevantProductsByKeyword(userMessage);
+            let productContext = "";
+            if (relevantProducts.length > 0) {
+                const productStrings = relevantProducts.map(p =>
+                    `*Nombre:* ${p.producto}\n*Descripción:* ${p.descripcion}\n*Precio:* ${p.precio}\n*Enlace:* ${p.url_tienda}`
+                );
+                productContext = `Claro, encontré esto para ti:\n\n${productStrings.join('\n\n')}`;
+            } else {
+                productContext = "No encontré un producto que coincida con tu búsqueda. ¿Puedes describirlo de otra manera?";
+            }
+
+            const systemMessage = `Eres Juan, un asesor de ventas de ASOFERRU Urabá. REGLAS ESTRICTAS: 1. Responde ÚNICAMENTE con el contexto que se te proporciona. No añadas conversación adicional. 2. Después de listar los productos, añade siempre en una nueva línea: "Puedes ver nuestro catálogo completo en https://asoferru.mitiendanube.com/productos/". 3. Si el contexto es que no se encontraron productos, responde solo con ese contexto. 4. NUNCA ofrezcas descuentos, promociones o regalos.`;
+            
+            const messagesToSent = [
+                { role: "system", content: systemMessage },
+                { role: "user", content: `Contexto: "${productContext}". Por favor, genera una respuesta basada en este contexto.`}
+            ];
+
+            const chatCompletion = await groq.chat.completions.create({
+                messages: messagesToSent,
+                model: "llama-3.1-8b-instant",
+            });
+
+            const aiResponse = chatCompletion.choices[0]?.message?.content || "Lo siento, no pude generar una respuesta.";
+            await sendWhatsAppMessage(phoneNumberId, from, aiResponse);
+        } catch (error) {
+            console.error("Error en el procesamiento del webhook:", error);
+        }
 
         res.status(200).send('EVENT_RECEIVED');
     });
