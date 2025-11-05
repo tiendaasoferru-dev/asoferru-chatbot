@@ -47,7 +47,6 @@ async function loadProductsFromSheet() {
 
 // --- INICIO: LÓGICA DE BÚSQUEDA SEMÁNTICA (LOCAL) ---
 
-// Singleton para el pipeline de embeddings. Evita cargar el modelo múltiples veces.
 let extractorPromise = null;
 const getExtractor = () => {
     if (extractorPromise === null) {
@@ -112,18 +111,17 @@ async function findRelevantProducts(userQuery, topK = 3) {
 // --- FIN: LÓGICA DE BÚSQUEDA SEMÁNTICA ---
 
 
-// --- Función para enviar mensajes a WhatsApp ---
-async function sendWhatsAppMessage(phoneNumberId, to, text) {
+// --- Función para enviar mensajes a WhatsApp (con depuración de errores) ---
+async function sendWhatsAppMessage(phoneNumberId, to, text, isDebugging = false) {
     const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
     const url = `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`;
 
     if (!WHATSAPP_TOKEN) {
         console.error('ERROR: La variable de entorno WHATSAPP_TOKEN no está configurada.');
-        console.log(`-> (Simulado) Enviando a ${to}: "${text}"`);
         return;
     }
 
-    console.log(`-> Enviando a ${to}: "${text}"`);
+    console.log(`-> Enviando a ${to}: "${text.substring(0, 60)}..."`);
 
     try {
         const response = await fetch(url, {
@@ -142,11 +140,20 @@ async function sendWhatsAppMessage(phoneNumberId, to, text) {
         if (!response.ok) {
             const errorData = await response.json();
             console.error(`Error al enviar mensaje de WhatsApp: ${response.status} ${response.statusText}`, errorData);
+            // Si no es un mensaje de depuración, envía el error al asesor
+            if (!isDebugging) {
+                const errorString = JSON.stringify(errorData);
+                await sendWhatsAppMessage(phoneNumberId, process.env.HUMAN_AGENT_NUMBER, `Error de API: ${errorString}`, true);
+            }
         } else {
             console.log('✅ Mensaje enviado con éxito.');
         }
     } catch (error) {
         console.error('Error en la función sendWhatsAppMessage:', error);
+        // Si no es un mensaje de depuración, envía el error al asesor
+        if (!isDebugging) {
+            await sendWhatsAppMessage(phoneNumberId, process.env.HUMAN_AGENT_NUMBER, `Error de Código: ${error.message}`, true);
+        }
     }
 }
 
@@ -159,7 +166,7 @@ async function sendWhatsAppMessage(phoneNumberId, to, text) {
     app.get('/', (req, res) => {
         res.json({
             status: 'active',
-            message: '¡El servidor del chatbot de Asoferru está activo!',
+            message: '¡El servidor del chatbot de Juan está activo!',
             timestamp: new Date().toISOString(),
             products_loaded: products.length
         });
@@ -194,10 +201,17 @@ async function sendWhatsAppMessage(phoneNumberId, to, text) {
 
         const userMessage = message.text.body;
         console.log(`💬 Mensaje de ${from}: ${userMessage}`);
+
+        const userMessageLower = userMessage.toLowerCase();
+        const greetingKeywords = ['hola', 'buenos', 'buenas', 'que tal'];
+
+        if (greetingKeywords.some(keyword => userMessageLower.startsWith(keyword))) {
+            const greeting = "Hola, soy Juan, tu Asesor de ASOFERRU Urabá. la Ferreteria mas grande de el Uraba";
+            await sendWhatsAppMessage(phoneNumberId, from, greeting);
+            return res.status(200).send('EVENT_RECEIVED');
+        }
         
         const paymentKeywords = ['pagar', 'pago', 'comprobante', 'comprar'];
-        const userMessageLower = userMessage.toLowerCase();
-        
         if (paymentKeywords.some(keyword => userMessageLower.includes(keyword))) {
             console.log(`💰 El usuario ${from} mencionó una palabra clave de pago.`);
             const promptMessage = '¡Hola! Si deseas confirmar tu compra, por favor, envía en este chat la imagen de tu comprobante de pago y un asesor te contactará para coordinar la entrega.';
@@ -210,20 +224,20 @@ async function sendWhatsAppMessage(phoneNumberId, to, text) {
             let productContext = "";
             if (relevantProducts.length > 0) {
                 const productStrings = relevantProducts.map(p =>
-                    `Nombre: ${p.producto}\nDescripción: ${p.descripcion}\nPrecio: ${p.precio}\nEnlace para ver y comprar: ${p.url_tienda}`
+                    `*Nombre:* ${p.producto}\n*Descripción:* ${p.descripcion}\n*Precio:* ${p.precio}\n*Enlace:* ${p.url_tienda}`
                 );
-                productContext = `He encontrado estos productos que podrían interesarte:\n\n${productStrings.join('\n\n')}`;
+                productContext = `Claro, encontré esto para ti:\n\n${productStrings.join('\n\n')}`;
             } else {
-                productContext = "No se encontraron productos que coincidan con la consulta. Sigue la REGLA 3 (FALLBACK OBLIGATORIO) de tu system prompt.";
+                productContext = "No encontré un producto que coincida con tu búsqueda. ¿Puedes describirlo de otra manera?";
             }
 
-            const history = conversationHistory[from] || [];
-            const systemMessage = `Eres Dayana... (resto del prompt sin cambios)`; 
+            const systemMessage = `Eres Juan, un asesor de ventas directo y eficiente de ASOFERRU Urabá. REGLAS ESTRICTAS: 1. Responde ÚNICAMENTE con el contexto que se te proporciona. No añadas conversación adicional. 2. Después de listar los productos, añade siempre en una nueva línea: "Puedes ver nuestro catálogo completo en https://asoferru.mitiendanube.com/productos/". 3. Si el contexto es que no se encontraron productos, responde solo con ese contexto.`;
+            
             history.push({ role: "user", content: userMessage });
 
             const messagesToSent = [
-                { role: "system", content: `${systemMessage}\n\nContexto de productos para esta consulta: ${productContext}` },
-                ...history
+                { role: "system", content: systemMessage },
+                { role: "user", content: `Contexto: "${productContext}". Por favor, genera una respuesta basada en este contexto.`}
             ];
 
             const chatCompletion = await groq.chat.completions.create({
