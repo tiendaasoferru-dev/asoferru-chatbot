@@ -21,6 +21,7 @@
     "google-auth-library": "^10.4.0",
     "google-spreadsheet": "^5.0.2",
     "groq-sdk": "^0.33.0",
+    "node-fetch": "^2.6.7",
     "papaparse": "^5.4.1"
   },
   "devDependencies": {

@@ -1,5 +1,7 @@
 const express = require('express');
 const Groq = require('groq-sdk');
+const Papa = require('papaparse');
+const fetch = require('node-fetch');
 const app = express();
 const conversationHistory = {};
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -7,28 +9,45 @@ const port = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// --- INICIO: BASE DE DATOS DE PRODUCTOS INTEGRADA ---
-const products = [
-    { "producto": "Cámara Solar IMOU", "descripcion": "Las cámaras solares IMOU ofrecen una solución de vigilancia inalámbrica y autónoma, ideal para quienes buscan una seguridad eficiente y fácil de instalar, especialmente en áreas donde la energía eléctrica no es una opción viable.", "precio": 510000, "url_tienda": "https://asoferru.mitiendanube.com/productos/camara-solar-imou1/" },
-    { "producto": "Kit de Aire Acondicionado", "descripcion": "Este kit de aire acondicionado de alta eficiencia es una solución completa diseñada para proporcionar un confort térmico en interiores, minimizando al mismo tiempo el consumo de energía.", "precio": 1299073, "url_tienda": "https://asoferru.mitiendanube.com/productos/kit-de-aire-acondicionado/" },
-    { "producto": "Kit iluminación Solar", "descripcion": "Este kit es una solución práctica y sostenible para llevar iluminación a cualquier lugar, con la comodidad de control remoto para una experiencia de usuario mejorada.", "precio": 347360, "url_tienda": "https://asoferru.mitiendanube.com/productos/kit-iluminacion-solar/" },
-    { "producto": "Kit Iluminación", "descripcion": "El kit de iluminación con sensor de movimiento, un sistema práctico y eficiente para mejorar la seguridad y el ahorro energético en cualquier espacio.", "precio": 116999, "url_tienda": "https://asoferru.mitiendanube.com/productos/kit-iluminacion/" },
-    { "producto": "Kit de Video Vigilancia Análogo", "descripcion": "Es una solución moderna y eficiente que aprovecha las ventajas de la tecnología HDCVI para ofrecer video en alta definición, funciones inteligentes de IA, y una instalación relativamente sencilla.", "precio": 285099, "url_tienda": "https://asoferru.mitiendanube.com/productos/kit-de-video-vigilancia-analogo/" },
-    { "producto": "Respirador AIR S950", "descripcion": "Respirador de media cara reutilizable diseñado para ofrecer protección respiratoria en entornos laborales con riesgo de inhalación de partículas, gases y vapores.", "precio": 89040, "url_tienda": "https://asoferru.mitiendanube.com/productos/respirador-air-s950/" },
-    { "producto": "Overol Anti fluidos para fumigación", "descripcion": "Prenda de protección personal especializada para proteger al usuario de la exposición a productos químicos utilizados en la fumigación.", "precio": 85680, "url_tienda": "https://asoferru.mitiendanube.com/productos/overol-anti-fluidos-para-fumigacion/" },
-    { "producto": "Arnás multipropósito dinámica", "descripcion": "Equipo de Protección Individual (EPI) diseñado para proporcionar seguridad y soporte a trabajadores que operan en alturas.", "precio": 144564, "url_tienda": "https://asoferru.mitiendanube.com/productos/arnes-multiproposito-dinamica/" },
-    { "producto": "Calzado Cooper", "descripcion": "Calzado de seguridad y trabajo, valorado por su capacidad para proteger al trabajador en condiciones exigentes sin comprometer la comodidad.", "precio": 428400, "url_tienda": "https://asoferru.mitiendanube.com/productos/calzado-cooper/" },
-    { "producto": "Cuñete de pintura T1 Pintuco", "descripcion": "Recipiente de 5 galones de pintura de alta calidad y rendimiento, adecuada para un uso exigente tanto en interiores como en exteriores.", "precio": 290000, "url_tienda": "https://asoferru.mitiendanube.com/productos/cunete-de-pintura-t1-pintuco/" }
-    // ... (se omiten los demás productos por brevedad, pero están todos incluidos)
-];
+// --- INICIO: CARGA DINÁMICA DE PRODUCTOS DESDE GOOGLE SHEETS ---
 
+const SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1zZBPz8ELaa06X7lBfh5GJcJkhzVK6lZHq7-TvG4LIls/export?format=csv&gid=1827939452';
+
+let products = [];
 let productsWithEmbeddings = [];
-// --- FIN: BASE DE DATOS DE PRODUCTOS INTEGRADA ---
+
+async function loadProductsFromSheet() {
+    console.log('🔄 Cargando productos desde Google Sheets...');
+    try {
+        const response = await fetch(SPREADSHEET_URL);
+        const csvText = await response.text();
+        
+        return new Promise(resolve => {
+            Papa.parse(csvText, {
+                header: true,
+                dynamicTyping: true,
+                complete: (results) => {
+                    const loadedProducts = results.data.filter(p => p.producto && p.producto.trim() !== '');
+                    console.log(`✅ ${loadedProducts.length} productos cargados correctamente.`);
+                    resolve(loadedProducts);
+                },
+                error: (error) => {
+                    console.error('Error al parsear el CSV:', error);
+                    resolve([]);
+                }
+            });
+        });
+    } catch (error) {
+        console.error('Error al descargar la hoja de cálculo:', error);
+        return [];
+    }
+}
+
+// --- FIN: CARGA DINÁMICA DE PRODUCTOS DESDE GOOGLE SHEETS ---
 
 
 // --- INICIO: LÓGICA DE BÚSQUEDA SEMÁNTICA ---
 
-// Función auxiliar para calcular la similitud del coseno entre dos vectores
 function cosineSimilarity(vecA, vecB) {
     let dotProduct = 0.0;
     let normA = 0.0;
@@ -44,13 +63,14 @@ function cosineSimilarity(vecA, vecB) {
     return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-// Genera los embeddings para todos los productos al iniciar el servidor
-async function generateEmbeddings() {
+async function generateEmbeddings(productList) {
     console.log('🧠 Generando mapa de significados para los productos...');
-    const embeddingModel = 'text-embedding-3-small'; // Modelo de embeddings eficiente
-
-    for (const product of products) {
-        const inputText = `Producto: ${product.producto}. Descripción: ${product.descripcion}`;
+    const embeddingModel = 'text-embedding-3-small';
+    productsWithEmbeddings = []; 
+    for (const product of productList) {
+        const productName = product.producto || '';
+        const productDesc = product.descripcion || '';
+        const inputText = `Producto: ${productName}. Descripción: ${productDesc}`;
         try {
             const embeddingResponse = await groq.embeddings.create({
                 model: embeddingModel,
@@ -59,31 +79,25 @@ async function generateEmbeddings() {
             const embedding = embeddingResponse.data[0].embedding;
             productsWithEmbeddings.push({ ...product, embedding });
         } catch (error) {
-            console.error(`Error generando embedding para el producto: ${product.producto}`, error);
+            console.error(`Error generando embedding para el producto: ${productName}`, error);
         }
     }
     console.log(`✅ Mapa de significados generado para ${productsWithEmbeddings.length} productos.`);
 }
 
-// Encuentra los productos más relevantes para una consulta de usuario
 async function findRelevantProducts(userQuery, topK = 3) {
     if (productsWithEmbeddings.length === 0) return [];
-
     try {
         const embeddingResponse = await groq.embeddings.create({
             model: 'text-embedding-3-small',
             input: userQuery,
         });
         const queryEmbedding = embeddingResponse.data[0].embedding;
-
         const similarities = productsWithEmbeddings.map(product => ({
             ...product,
             similarity: cosineSimilarity(queryEmbedding, product.embedding)
         }));
-
         similarities.sort((a, b) => b.similarity - a.similarity);
-
-        // Devolver solo productos con una similitud razonable
         return similarities.slice(0, topK).filter(p => p.similarity > 0.35);
     } catch (error) {
         console.error('Error en findRelevantProducts:', error);
@@ -94,45 +108,91 @@ async function findRelevantProducts(userQuery, topK = 3) {
 // --- FIN: LÓGICA DE BÚSQUEDA SEMÁNTICA ---
 
 
-// --- Función para enviar mensajes a WhatsApp (sin cambios) ---
-async function sendWhatsAppMessage(phoneNumberId, to, message) {
-    // ... (código original sin cambios)
+// --- Función para enviar mensajes a WhatsApp ---
+async function sendWhatsAppMessage(phoneNumberId, to, text) {
+    // Esta es una función de marcador de posición. La implementación real dependería de cómo
+    // estás enviando mensajes (por ejemplo, a través de la API de la nube de WhatsApp).
+    // Asegúrate de que esta función esté correctamente implementada con tu proveedor de servicios de WhatsApp.
+    console.log(`-> Enviando a ${to}: "${text}"`);
 }
 
 
 // --- Lógica Principal de la Aplicación ---
 (async () => {
-    // Genera el mapa de significados al iniciar.
-    await generateEmbeddings();
+    products = await loadProductsFromSheet();
+    await generateEmbeddings(products);
 
     app.get('/', (req, res) => {
         res.json({
             status: 'active',
             message: '¡El servidor del chatbot de Asoferru está activo!',
             timestamp: new Date().toISOString(),
-            products: products.length
+            products_loaded: products.length
         });
     });
 
     app.post('/webhook', async (req, res) => {
         const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-        if (!message || message.type !== 'text') {
+        if (!message) {
+            return res.status(200).send('EVENT_RECEIVED');
+        }
+
+        const from = message.from;
+        const phoneNumberId = req.body.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
+
+        // --- INICIO: GESTIÓN DE COMPROBANTES DE PAGO (IMÁGENES) ---
+        if (message.type === 'image') {
+            console.log(`📸 Imagen recibida de ${from}. Es un comprobante de pago.`);
+
+            const userConfirmation = '¡Gracias! Hemos recibido tu comprobante. Un asesor humano se pondrá en contacto contigo en breve para coordinar el envío.';
+            const agentNotification = `¡Alerta de Venta! 🔔\n\nEl cliente con el número *${from}* ha enviado un comprobante de pago.\n\nPor favor, revisa su chat para coordinar el envío.`
+            
+            const agentNumber = process.env.HUMAN_AGENT_NUMBER;
+
+            if (!agentNumber) {
+                console.error('ERROR: La variable de entorno HUMAN_AGENT_NUMBER no está configurada.');
+            } else {
+                // 1. Notificar al asesor
+                await sendWhatsAppMessage(phoneNumberId, agentNumber, agentNotification);
+            }
+            
+            // 2. Confirmar al usuario
+            await sendWhatsAppMessage(phoneNumberId, from, userConfirmation);
+
+            return res.status(200).send('EVENT_RECEIVED');
+        }
+        // --- FIN: GESTIÓN DE COMPROBANTES DE PAGO ---
+
+
+        // Solo procesamos mensajes de texto a partir de aquí
+        if (message.type !== 'text') {
             return res.status(200).send('EVENT_RECEIVED');
         }
 
         const userMessage = message.text.body;
-        const from = message.from;
-        const phoneNumberId = req.body.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id;
         console.log(`💬 Mensaje de ${from}: ${userMessage}`);
+        
+        // --- INICIO: PALABRAS CLAVE PARA PAGO ---
+        const paymentKeywords = ['pagar', 'pago', 'comprobante', 'comprar'];
+        const userMessageLower = userMessage.toLowerCase();
+        
+        if (paymentKeywords.some(keyword => userMessageLower.includes(keyword))) {
+            console.log(`💰 El usuario ${from} mencionó una palabra clave de pago.`);
+            const promptMessage = '¡Hola! Si deseas confirmar tu compra, por favor, envía en este chat la imagen de tu comprobante de pago y un asesor te contactará para coordinar la entrega.';
+            await sendWhatsAppMessage(phoneNumberId, from, promptMessage);
+            return res.status(200).send('EVENT_RECEIVED');
+        }
+        // --- FIN: PALABRAS CLAVE PARA PAGO ---
 
-        // --- INICIO: NUEVA LÓGICA DE PROCESAMIENTO ---
+
+        // --- INICIO: LÓGICA DE BÚSQUEDA SEMÁNTICA (FALLBACK) ---
         try {
             const relevantProducts = await findRelevantProducts(userMessage);
 
             let productContext = "";
             if (relevantProducts.length > 0) {
                 const productStrings = relevantProducts.map(p =>
-                    `Nombre: ${p.producto}\nDescripción: ${p.descripcion}\nEnlace para ver y comprar: ${p.url_tienda}`
+                    `Nombre: ${p.producto}\nDescripción: ${p.descripcion}\nPrecio: ${p.precio}\nEnlace para ver y comprar: ${p.url_tienda}`
                 );
                 productContext = `He encontrado estos productos que podrían interesarte:\n\n${productStrings.join('\n\n')}`;
             } else {
@@ -140,7 +200,7 @@ async function sendWhatsAppMessage(phoneNumberId, to, message) {
             }
 
             const history = conversationHistory[from] || [];
-            const systemMessage = `Eres Dayana... (resto del prompt sin cambios)`; // El prompt estricto que definimos antes
+            const systemMessage = `Eres Dayana... (resto del prompt sin cambios)`; 
 
             history.push({ role: "user", content: userMessage });
 
@@ -156,14 +216,14 @@ async function sendWhatsAppMessage(phoneNumberId, to, message) {
 
             const aiResponse = chatCompletion.choices[0]?.message?.content || "Lo siento, no pude generar una respuesta.";
             history.push({ role: "assistant", content: aiResponse });
-            conversationHistory[from] = history.slice(-6); // Mantener solo las últimas 3 interacciones
+            conversationHistory[from] = history.slice(-6); 
 
             await sendWhatsAppMessage(phoneNumberId, from, aiResponse);
 
         } catch (error) {
             console.error("Error en el procesamiento del webhook:", error);
         }
-        // --- FIN: NUEVA LÓGICA DE PROCESAMIENTO ---
+        // --- FIN: LÓGICA DE BÚSQUEDA SEMÁNTICA ---
 
         res.status(200).send('EVENT_RECEIVED');
     });
