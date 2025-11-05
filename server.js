@@ -16,31 +16,7 @@ const SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1zZBPz8ELaa06X7l
 let products = [];
 let productsWithEmbeddings = [];
 
-async function loadProductsFromSheet() {
-    console.log('🔄 Cargando productos desde Google Sheets...');
-    try {
-        const response = await fetch(SPREADSHEET_URL);
-        const csvText = await response.text();
-        return new Promise(resolve => {
-            Papa.parse(csvText, {
-                header: true,
-                dynamicTyping: true,
-                complete: (results) => {
-                    const loadedProducts = results.data.filter(p => p.producto && p.producto.trim() !== '');
-                    console.log(`✅ ${loadedProducts.length} productos cargados correctamente.`);
-                    resolve(loadedProducts);
-                },
-                error: (error) => {
-                    console.error('Error al parsear el CSV:', error);
-                    resolve([]);
-                }
-            });
-        });
-    } catch (error) {
-        console.error('Error al descargar la hoja de cálculo:', error);
-        return [];
-    }
-}
+// ... (funciones de carga y búsqueda semántica permanecen, pero no se usarán por ahora)
 
 // --- FIN: CARGA DINÁMICA DE PRODUCTOS ---
 
@@ -89,23 +65,8 @@ async function generateEmbeddings(productList) {
 }
 
 async function findRelevantProducts(userQuery, topK = 3) {
-    if (productsWithEmbeddings.length === 0) return [];
-    try {
-        const extractor = await getExtractor();
-        const output = await extractor(userQuery, { pooling: 'mean', normalize: true });
-        const queryEmbedding = Array.from(output.data);
-
-        const similarities = productsWithEmbeddings.map(product => ({
-            ...product,
-            similarity: cosineSimilarity(queryEmbedding, product.embedding)
-        }));
-
-        similarities.sort((a, b) => b.similarity - a.similarity);
-        return similarities.slice(0, topK).filter(p => p.similarity > 0.35);
-    } catch (error) {
-        console.error('Error en findRelevantProducts:', error);
-        return [];
-    }
+    // --- DIAGNÓSTICO: Devolver siempre vacío para evitar la carga del modelo ---
+    return [];
 }
 
 // --- FIN: LÓGICA DE BÚSQUEDA SEMÁNTICA ---
@@ -140,7 +101,6 @@ async function sendWhatsAppMessage(phoneNumberId, to, text, isDebugging = false)
         if (!response.ok) {
             const errorData = await response.json();
             console.error(`Error al enviar mensaje de WhatsApp: ${response.status} ${response.statusText}`, errorData);
-            // Si no es un mensaje de depuración, envía el error al asesor
             if (!isDebugging) {
                 const errorString = JSON.stringify(errorData);
                 await sendWhatsAppMessage(phoneNumberId, process.env.HUMAN_AGENT_NUMBER, `Error de API: ${errorString}`, true);
@@ -150,7 +110,6 @@ async function sendWhatsAppMessage(phoneNumberId, to, text, isDebugging = false)
         }
     } catch (error) {
         console.error('Error en la función sendWhatsAppMessage:', error);
-        // Si no es un mensaje de depuración, envía el error al asesor
         if (!isDebugging) {
             await sendWhatsAppMessage(phoneNumberId, process.env.HUMAN_AGENT_NUMBER, `Error de Código: ${error.message}`, true);
         }
@@ -160,15 +119,18 @@ async function sendWhatsAppMessage(phoneNumberId, to, text, isDebugging = false)
 
 // --- Lógica Principal de la Aplicación ---
 (async () => {
-    products = await loadProductsFromSheet();
-    await generateEmbeddings(products);
+    // --- DIAGNÓSTICO: Carga de embeddings desactivada temporalmente ---
+    console.log('⚠️ MODO DIAGNÓSTICO: La carga de productos y la búsqueda semántica están desactivadas.');
+    // products = await loadProductsFromSheet();
+    // await generateEmbeddings(products);
+    // ---------------------------------------------------------
 
     app.get('/', (req, res) => {
         res.json({
             status: 'active',
-            message: '¡El servidor del chatbot de Juan está activo!',
+            message: '¡El servidor del chatbot de Juan está activo! (Modo Diagnóstico)',
             timestamp: new Date().toISOString(),
-            products_loaded: products.length
+            products_loaded: 0
         });
     });
 
@@ -219,39 +181,9 @@ async function sendWhatsAppMessage(phoneNumberId, to, text, isDebugging = false)
             return res.status(200).send('EVENT_RECEIVED');
         }
 
-        try {
-            const relevantProducts = await findRelevantProducts(userMessage);
-            let productContext = "";
-            if (relevantProducts.length > 0) {
-                const productStrings = relevantProducts.map(p =>
-                    `*Nombre:* ${p.producto}\n*Descripción:* ${p.descripcion}\n*Precio:* ${p.precio}\n*Enlace:* ${p.url_tienda}`
-                );
-                productContext = `Claro, encontré esto para ti:\n\n${productStrings.join('\n\n')}`;
-            } else {
-                productContext = "No encontré un producto que coincida con tu búsqueda. ¿Puedes describirlo de otra manera?";
-            }
-
-            const systemMessage = `Eres Juan, un asesor de ventas directo y eficiente de ASOFERRU Urabá. REGLAS ESTRICTAS: 1. Responde ÚNICAMENTE con el contexto que se te proporciona. No añadas conversación adicional. 2. Después de listar los productos, añade siempre en una nueva línea: "Puedes ver nuestro catálogo completo en https://asoferru.mitiendanube.com/productos/". 3. Si el contexto es que no se encontraron productos, responde solo con ese contexto.`;
-            
-            history.push({ role: "user", content: userMessage });
-
-            const messagesToSent = [
-                { role: "system", content: systemMessage },
-                { role: "user", content: `Contexto: "${productContext}". Por favor, genera una respuesta basada en este contexto.`}
-            ];
-
-            const chatCompletion = await groq.chat.completions.create({
-                messages: messagesToSent,
-                model: "llama-3.1-8b-instant",
-            });
-
-            const aiResponse = chatCompletion.choices[0]?.message?.content || "Lo siento, no pude generar una respuesta.";
-            history.push({ role: "assistant", content: aiResponse });
-            conversationHistory[from] = history.slice(-6); 
-            await sendWhatsAppMessage(phoneNumberId, from, aiResponse);
-        } catch (error) {
-            console.error("Error en el procesamiento del webhook:", error);
-        }
+        // Como la búsqueda está desactivada, respondemos amablemente.
+        const fallbackMessage = "En este momento estoy en mantenimiento y no puedo buscar productos. Por favor, intenta más tarde.";
+        await sendWhatsAppMessage(phoneNumberId, from, fallbackMessage);
 
         res.status(200).send('EVENT_RECEIVED');
     });
