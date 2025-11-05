@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "vitest"
+    "test": "vitest",
+    "postinstall": "npm install --platform=linux --arch=x64 sharp"
   },
   "keywords": [
     "whatsapp",
